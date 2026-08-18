@@ -184,6 +184,10 @@ local function get_network_info(entity)
             local capsule_count = network_entities.capsules and table_size(network_entities.capsules) or 0
             table.insert(info, { key = "Active Capsules", value = capsule_count })
 
+            -- Universal flow evaluation for EVERY segment
+            local flow = capsule_transport.get_segment_flow(net_id)
+            table.insert(info, { key = "Flow Direction", value = flow.status })
+
             local pump_dirs = {}
             for u_num, member in pairs(network_entities) do
                 if u_num ~= "capsules" and u_num ~= "length" and member and member.valid and member.name == "pneumatic-pump" then
@@ -199,15 +203,14 @@ local function get_network_info(entity)
                 table.insert(info, { key = "Pumps", value = "0" })
             end
 
+            -- Hub-specific status overlays
             if entity.name == "capsule-hub-horizontal" or entity.name == "capsule-hub-vertical" then
                 local eval = capsule_evaluator.evaluate_hub_readiness(entity, net_id)
                 if eval then
                     local payload_str = eval.payload_ready and ("Ready (" .. eval.payload_name .. " x" .. eval.capacity .. ")") or "Not Ready"
-                    local flow_str = eval.flow_ready and ("Outward (" .. eval.flow_direction .. ")") or (eval.flow_direction and "Inward Flow" or "No Flow")
                     local status_str = eval.ready and "READY TO DISPATCH" or "WAITING"
 
                     table.insert(info, { key = "Payload Status", value = payload_str })
-                    table.insert(info, { key = "Flow Direction", value = flow_str })
                     table.insert(info, { key = "Dispatch Status", value = status_str })
                 end
             end
