@@ -494,7 +494,7 @@ event_manager.register(defines.events.on_tick, update_selected_gui)
 local build_events = {
     defines.events.on_built_entity,
     defines.events.on_robot_built_entity,
-    defines.events.script_raised_built,
+    defines.script_raised_built,
     defines.events.on_entity_cloned,
 }
 if defines.events.on_space_platform_built_entity then
