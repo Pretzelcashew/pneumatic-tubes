@@ -234,29 +234,7 @@ local function rebuild_cluster(cluster, excluded_unit_number)
         end
     end
 
-    -- Step 2: Multi-Port Junction Networks (Generic for ANY entity with >= 2 connections)
-    for u_num, entity in pairs(cluster) do
-        if entity.valid and u_num ~= excluded_unit_number then
-            local conns = tube_connections.get_adjacent_connections(entity)
-            if #conns >= 2 then
-                local junction_net_id = allocate_fresh_network_id()
-                local junction_members = { [u_num] = entity }
-                bind_entity_to_network(u_num, junction_net_id)
-
-                for _, conn in ipairs(conns) do
-                    local neighbor = conn.neighbor
-                    if neighbor and neighbor.valid and neighbor.unit_number ~= excluded_unit_number then
-                        junction_members[neighbor.unit_number] = neighbor
-                        bind_entity_to_network(neighbor.unit_number, junction_net_id)
-                    end
-                end
-
-                storage.pneumatic_networks[junction_net_id] = junction_members
-            end
-        end
-    end
-
-    -- Step 3: Direct Join <-> Join Pairwise Connections
+    -- Step 2: Direct Join <-> Join Connections (Pumps touching Hubs directly)
     local processed_join_pairs = {}
 
     for u_num, entity in pairs(cluster) do
@@ -288,7 +266,7 @@ local function rebuild_cluster(cluster, excluded_unit_number)
         end
     end
 
-    -- Step 4: Assign isolated single-member fallback network ONLY if entity is completely unconnected
+    -- Step 3: Single-member fallback ONLY for completely unconnected entities
     for u_num, entity in pairs(cluster) do
         if entity.valid and u_num ~= excluded_unit_number then
             local net_ids = storage.entity_to_network[u_num]
