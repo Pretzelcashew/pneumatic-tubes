@@ -12,12 +12,12 @@ connections.definitions = {
         },
         ports = {
             ["horizontal"] = {
-                { offset = {x = -2, y = 0}, mode = "merge", port_id = "west" },
-                { offset = {x =  2, y = 0}, mode = "merge", port_id = "east" },
+                { offset = {x = -2.0, y = 0.0}, mode = "merge", port_id = "west" },
+                { offset = {x =  2.0, y = 0.0}, mode = "merge", port_id = "east" },
             },
             ["vertical"] = {
-                { offset = {x = 0, y = -2}, mode = "merge", port_id = "north" },
-                { offset = {x = 0, y =  2}, mode = "merge", port_id = "south" },
+                { offset = {x = 0.0, y = -2.0}, mode = "merge", port_id = "north" },
+                { offset = {x = 0.0, y =  2.0}, mode = "merge", port_id = "south" },
             },
         },
         can_connect = function(source, target, source_port, target_port)
@@ -34,20 +34,20 @@ connections.definitions = {
         },
         ports = {
             ["north"] = {
-                { offset = {x = 0, y = -2}, mode = "join", port_id = "output" },
-                { offset = {x = 0, y =  2}, mode = "join", port_id = "input"  },
+                { offset = {x = 0.0, y = -2.0}, mode = "join", port_id = "output" },
+                { offset = {x = 0.0, y =  2.0}, mode = "join", port_id = "input"  },
             },
             ["south"] = {
-                { offset = {x = 0, y =  2}, mode = "join", port_id = "output" },
-                { offset = {x = 0, y = -2}, mode = "join", port_id = "input"  },
+                { offset = {x = 0.0, y =  2.0}, mode = "join", port_id = "output" },
+                { offset = {x = 0.0, y = -2.0}, mode = "join", port_id = "input"  },
             },
             ["east"] = {
-                { offset = {x =  2, y = 0}, mode = "join", port_id = "output" },
-                { offset = {x = -2, y = 0}, mode = "join", port_id = "input"  },
+                { offset = {x =  2.0, y = 0.0}, mode = "join", port_id = "output" },
+                { offset = {x = -2.0, y = 0.0}, mode = "join", port_id = "input"  },
             },
             ["west"] = {
-                { offset = {x = -2, y = 0}, mode = "join", port_id = "output" },
-                { offset = {x =  2, y = 0}, mode = "join", port_id = "input"  },
+                { offset = {x = -2.0, y = 0.0}, mode = "join", port_id = "output" },
+                { offset = {x =  2.0, y = 0.0}, mode = "join", port_id = "input"  },
             },
         },
         can_connect = function(source, target, source_port, target_port)
@@ -110,6 +110,11 @@ connections.definitions = {
     },
 }
 
+--- Checks if two port world positions overlap within tolerance
+local function ports_overlap(pos1, pos2)
+    return math.abs(pos1.x - pos2.x) < 0.6 and math.abs(pos1.y - pos2.y) < 0.6
+end
+
 function connections.is_connectable(entity_name)
     return connections.definitions[entity_name] ~= nil
 end
@@ -138,7 +143,6 @@ function connections.get_offsets(entity)
     return offsets
 end
 
---- 0.6 tolerance accommodates 0.5 tile center shifts between 1x2 and 2x1 entities
 function connections.get_port_at_offset(entity, offset_x, offset_y)
     local ports = connections.get_ports(entity)
     for _, port in ipairs(ports) do
@@ -167,16 +171,31 @@ function connections.can_connect_entities(source, target)
     local target_def = connections.definitions[target.name]
     if not (source_def and target_def) then return false end
 
-    local dx = target.position.x - source.position.x
-    local dy = target.position.y - source.position.y
+    local source_ports = connections.get_ports(source)
+    local target_ports = connections.get_ports(target)
 
-    local source_port = connections.get_port_at_offset(source, dx, dy)
-    local target_port = connections.get_port_at_offset(target, -dx, -dy)
+    for _, s_port in ipairs(source_ports) do
+        local s_world = {
+            x = source.position.x + s_port.offset.x,
+            y = source.position.y + s_port.offset.y
+        }
+        for _, t_port in ipairs(target_ports) do
+            local t_world = {
+                x = target.position.x + t_port.offset.x,
+                y = target.position.y + t_port.offset.y
+            }
+            if ports_overlap(s_world, t_world) then
+                if source_def.can_connect(source, target, s_port, t_port) then
+                    return true
+                end
+            end
+        end
+    end
 
-    return source_def.can_connect(source, target, source_port, target_port)
+    return false
 end
 
---- Scans entity ports and returns all connected valid neighbors
+--- Scans entity ports and returns all connected valid neighbors using world-space matching
 function connections.get_adjacent_connections(entity, ignore_unit_number)
     local result = {}
     if not (entity and entity.valid) then return result end
@@ -193,15 +212,19 @@ function connections.get_adjacent_connections(entity, ignore_unit_number)
         for _, e in ipairs(found) do
             if e.valid and e.unit_number ~= entity.unit_number and e.unit_number ~= ignore_unit_number then
                 if connections.is_connectable(e.name) then
-                    local dx = e.position.x - entity.position.x
-                    local dy = e.position.y - entity.position.y
-                    local target_port = connections.get_port_at_offset(e, -dx, -dy)
-                    if target_port then
-                        table.insert(result, {
-                            neighbor = e,
-                            source_port = port,
-                            target_port = target_port
-                        })
+                    local target_ports = connections.get_ports(e)
+                    for _, target_port in ipairs(target_ports) do
+                        local t_world = {
+                            x = e.position.x + target_port.offset.x,
+                            y = e.position.y + target_port.offset.y
+                        }
+                        if ports_overlap(world_pos, t_world) then
+                            table.insert(result, {
+                                neighbor = e,
+                                source_port = port,
+                                target_port = target_port
+                            })
+                        end
                     end
                 end
             end
