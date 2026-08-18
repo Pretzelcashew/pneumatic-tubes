@@ -32,23 +32,25 @@ function capsule_transport.get_segment_flow(net_id)
                         local neighbor_nets = storage.entity_to_network and storage.entity_to_network[neighbor.unit_number]
                         if neighbor_nets then
                             for target_id, _ in pairs(neighbor_nets) do
-                                if port.port_id == "input" then
-                                    input_net_id = target_id
-                                elseif port.port_id == "output" then
-                                    output_net_id = target_id
+                                if target_id ~= net_id then
+                                    if port.port_id == "input" then
+                                        input_net_id = target_id
+                                    elseif port.port_id == "output" then
+                                        output_net_id = target_id
+                                    end
                                 end
                             end
                         end
                     end
                 end
 
-                -- Pushing air OUT of net_id into downstream output network
-                if input_net_id == net_id and output_net_id and output_net_id ~= net_id then
+                -- Pushing air OUT to downstream network
+                if output_net_id then
                     table.insert(outflow_targets, output_net_id)
                 end
 
-                -- Pulling air INTO net_id from upstream input network
-                if output_net_id == net_id and input_net_id and input_net_id ~= net_id then
+                -- Pulling air IN from upstream network
+                if input_net_id then
                     table.insert(inflow_sources, input_net_id)
                 end
             end
@@ -70,7 +72,14 @@ function capsule_transport.get_segment_flow(net_id)
             inflow_sources = inflow_sources
         }
     elseif #outflow_targets > 0 and #inflow_sources > 0 then
-        return { status = "Conflict", flow_type = "conflict" }
+        return {
+            status = "Outward",
+            flow_type = "outward",
+            target_net_id = outflow_targets[1],
+            source_net_id = inflow_sources[1],
+            outflow_targets = outflow_targets,
+            inflow_sources = inflow_sources
+        }
     else
         return { status = "No Flow", flow_type = "none" }
     end
