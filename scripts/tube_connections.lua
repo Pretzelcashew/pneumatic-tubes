@@ -64,17 +64,17 @@ connections.definitions = {
         },
         ports = {
             ["default"] = {
-                -- Ends (West & East) - Independent Join Only (Purple & Green)
+                -- Ends (West & East) - Independent Join Only
                 { offset = {x = -2, y = 0}, mode = "join", port_id = "west_end" },
                 { offset = {x =  2, y = 0}, mode = "join", port_id = "east_end" },
 
-                -- Red Channel - Join-Passthrough
-                { offset = {x = -0.5, y = -1}, mode = "join", port_id = "north_west", pair_id = "west_channel" },
-                { offset = {x = -0.5, y =  1}, mode = "join", port_id = "south_west", pair_id = "west_channel" },
+                -- West Side Ports - Independent Join Only
+                { offset = {x = -0.5, y = -1}, mode = "join", port_id = "north_west" },
+                { offset = {x = -0.5, y =  1}, mode = "join", port_id = "south_west" },
 
-                -- Blue Channel - Join-Passthrough
-                { offset = {x =  0.5, y = -1}, mode = "join", port_id = "north_east", pair_id = "east_channel" },
-                { offset = {x =  0.5, y =  1}, mode = "join", port_id = "south_east", pair_id = "east_channel" },
+                -- East Side Ports - Independent Join Only
+                { offset = {x =  0.5, y = -1}, mode = "join", port_id = "north_east" },
+                { offset = {x =  0.5, y =  1}, mode = "join", port_id = "south_east" },
             },
         },
         can_connect = function(source, target, source_port, target_port)
@@ -95,13 +95,13 @@ connections.definitions = {
                 { offset = {x = 0, y = -2}, mode = "join", port_id = "north_end" },
                 { offset = {x = 0, y =  2}, mode = "join", port_id = "south_end" },
 
-                -- Top Channel - Join-Passthrough
-                { offset = {x = -1, y = -0.5}, mode = "join", port_id = "west_north", pair_id = "north_channel" },
-                { offset = {x =  1, y = -0.5}, mode = "join", port_id = "east_north", pair_id = "north_channel" },
+                -- North Side Ports - Independent Join Only
+                { offset = {x = -1, y = -0.5}, mode = "join", port_id = "west_north" },
+                { offset = {x =  1, y = -0.5}, mode = "join", port_id = "east_north" },
 
-                -- Bottom Channel - Join-Passthrough
-                { offset = {x = -1, y =  0.5}, mode = "join", port_id = "west_south", pair_id = "south_channel" },
-                { offset = {x =  1, y =  0.5}, mode = "join", port_id = "east_south", pair_id = "south_channel" },
+                -- South Side Ports - Independent Join Only
+                { offset = {x = -1, y =  0.5}, mode = "join", port_id = "west_south" },
+                { offset = {x =  1, y =  0.5}, mode = "join", port_id = "east_south" },
             },
         },
         can_connect = function(source, target, source_port, target_port)
@@ -153,14 +153,13 @@ function connections.is_join_only(entity)
     local ports = connections.get_ports(entity)
     if #ports == 0 then return false end
     for _, port in ipairs(ports) do
-        if port.mode ~= "join" and port.mode ~= "join_passthrough" then
+        if port.mode ~= "join" then
             return false
         end
     end
     return true
 end
 
---- Returns the opposite port on the hub across the pass-through channel
 function connections.get_opposite_passthrough_port(entity, port)
     if not (entity and entity.valid and port and port.pair_id) then return nil end
     local ports = connections.get_ports(entity)
@@ -172,7 +171,6 @@ function connections.get_opposite_passthrough_port(entity, port)
     return nil
 end
 
---- Returns all paired join-passthrough port channels for an entity
 function connections.get_passthrough_pairs(entity)
     if not (entity and entity.valid) then return {} end
     local ports = connections.get_ports(entity)
