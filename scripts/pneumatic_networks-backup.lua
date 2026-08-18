@@ -151,8 +151,6 @@ local function gather_physical_cluster(initial_entities, excluded_unit_number)
     return cluster
 end
 
-
-
 --------------------------------------------------------------------------------
 -- UI DATA PROVIDER
 --------------------------------------------------------------------------------
@@ -236,6 +234,7 @@ local function on_entity_built(e)
     local conns = tube_connections.get_adjacent_connections(entity)
 
     if not is_join then
+        -- TUBE PLACEMENT: Merges only adjacent non-join tubes
         local adjacent_tube_nets = {}
         local adjacent_joiners = {}
 
@@ -245,26 +244,6 @@ local function on_entity_built(e)
                 local n_num = neighbor.unit_number
                 if tube_connections.is_join_only(neighbor) then
                     table.insert(adjacent_joiners, neighbor)
-
-                    if neighbor.name ~= "pneumatic-pump" and conn.target_port and conn.target_port.mode == "join_passthrough" then
-                        local opp_port = tube_connections.get_opposite_passthrough_port(neighbor, conn.target_port)
-                        if opp_port then
-                            local opp_conns = tube_connections.get_adjacent_connections(neighbor)
-                            for _, opp_conn in ipairs(opp_conns) do
-                                if opp_conn.source_port.port_id == opp_port.port_id then
-                                    local opp_neighbor = opp_conn.neighbor
-                                    if opp_neighbor and opp_neighbor.valid and not tube_connections.is_join_only(opp_neighbor) then
-                                        local nets = storage.entity_to_network[opp_neighbor.unit_number]
-                                        if nets then
-                                            for net_id, _ in pairs(nets) do
-                                                adjacent_tube_nets[net_id] = true
-                                            end
-                                        end
-                                    end
-                                end
-                            end
-                        end
-                    end
                 else
                     if conn.source_port and conn.source_port.mode == "merge"
                        and conn.target_port and conn.target_port.mode == "merge" then
@@ -321,50 +300,7 @@ local function on_entity_built(e)
         end
 
     else
-        local passthrough_pairs = tube_connections.get_passthrough_pairs(entity)
-        for pair_id, ports in pairs(passthrough_pairs) do
-            local channel_nets = {}
-            for _, port in ipairs(ports) do
-                for _, conn in ipairs(conns) do
-                    if conn.source_port and conn.source_port.port_id == port.port_id then
-                        local neighbor = conn.neighbor
-                        if neighbor and neighbor.valid and not tube_connections.is_join_only(neighbor) then
-                            local nets = storage.entity_to_network[neighbor.unit_number]
-                            if nets then
-                                for net_id, _ in pairs(nets) do
-                                    table.insert(channel_nets, net_id)
-                                end
-                            end
-                        end
-                    end
-                end
-            end
-
-            if entity.name ~= "pneumatic-pump" and #channel_nets > 1 then
-                local primary_net_id = channel_nets[1]
-                for i = 2, #channel_nets do
-                    local sec_net_id = channel_nets[i]
-                    if sec_net_id ~= primary_net_id then
-                        local sec_members = storage.pneumatic_networks[sec_net_id]
-                        if sec_members then
-                            for member_unum, member_ent in pairs(sec_members) do
-                                if member_unum ~= "capsules" and member_unum ~= "length" then
-                                    storage.pneumatic_networks[primary_net_id][member_unum] = member_ent
-                                    bind_entity_to_network(member_unum, primary_net_id)
-                                    if storage.entity_to_network[member_unum] then
-                                        storage.entity_to_network[member_unum][sec_net_id] = nil
-                                    end
-                                end
-                            end
-                        end
-                        merge_network_capsules(sec_net_id, primary_net_id)
-                        storage.pneumatic_networks[sec_net_id] = nil
-                        release_network_id(sec_net_id)
-                    end
-                end
-            end
-        end
-
+        -- JOIN-ONLY PLACEMENT (Hubs & Pumps): Pure boundaries, NEVER merge networks
         for _, conn in ipairs(conns) do
             local neighbor = conn.neighbor
             if neighbor and neighbor.valid then
@@ -468,26 +404,6 @@ local function rebuild_cluster(cluster, excluded_unit_number)
                     if neighbor and neighbor.valid and neighbor.unit_number ~= excluded_unit_number then
                         if tube_connections.is_join_only(neighbor) then
                             boundary_joiners[neighbor.unit_number] = neighbor
-
-                            if neighbor.name ~= "pneumatic-pump" and conn.target_port and conn.target_port.mode == "join_passthrough" then
-                                local opp_port = tube_connections.get_opposite_passthrough_port(neighbor, conn.target_port)
-                                if opp_port then
-                                    local opp_conns = tube_connections.get_adjacent_connections(neighbor)
-                                    for _, opp_conn in ipairs(opp_conns) do
-                                        if opp_conn.source_port.port_id == opp_port.port_id then
-                                            local opp_neighbor = opp_conn.neighbor
-                                            if opp_neighbor and opp_neighbor.valid
-                                               and opp_neighbor.unit_number ~= excluded_unit_number
-                                               and not tube_connections.is_join_only(opp_neighbor) then
-                                                if cluster[opp_neighbor.unit_number] and not processed_tubes[opp_neighbor.unit_number] then
-                                                    processed_tubes[opp_neighbor.unit_number] = true
-                                                    table.insert(tube_queue, opp_neighbor)
-                                                end
-                                            end
-                                        end
-                                    end
-                                end
-                            end
                         else
                             if conn.source_port and conn.source_port.mode == "merge"
                                and conn.target_port and conn.target_port.mode == "merge" then
