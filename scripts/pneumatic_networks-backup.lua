@@ -151,27 +151,53 @@ local function gather_physical_cluster(initial_entities, excluded_unit_number)
     return cluster
 end
 
+local function is_private_sub_network(net_id)
+    local net = storage.pneumatic_networks and storage.pneumatic_networks[net_id]
+    if not net then return false end
+
+    local count = 0
+    local solo_entity = nil
+    for k, ent in pairs(net) do
+        if k ~= "capsules" and k ~= "length" then
+            count = count + 1
+            solo_entity = ent
+        end
+    end
+
+    return (count == 1 and solo_entity and solo_entity.valid and tube_connections.is_join_only(solo_entity))
+end
+
 local function rebuild_cluster(cluster, excluded_unit_number)
     storage.pneumatic_networks = storage.pneumatic_networks or {}
     storage.entity_to_network = storage.entity_to_network or {}
 
+    -- Unbind cluster entities ONLY from shared networks, keeping private internal networks intact
     for u_num, _ in pairs(cluster) do
-        storage.entity_to_network[u_num] = nil
+        if storage.entity_to_network[u_num] then
+            for net_id, _ in pairs(storage.entity_to_network[u_num]) do
+                if not is_private_sub_network(net_id) then
+                    storage.entity_to_network[u_num][net_id] = nil
+                end
+            end
+        end
     end
 
+    -- Clean up shared tube networks
     for net_id, members in pairs(storage.pneumatic_networks) do
-        for u_num, _ in pairs(cluster) do
-            members[u_num] = nil
-        end
+        if not is_private_sub_network(net_id) then
+            for u_num, _ in pairs(cluster) do
+                members[u_num] = nil
+            end
 
-        local member_count = 0
-        for k, _ in pairs(members) do
-            if k ~= "capsules" and k ~= "length" then member_count = member_count + 1 end
-        end
+            local member_count = 0
+            for k, _ in pairs(members) do
+                if k ~= "capsules" and k ~= "length" then member_count = member_count + 1 end
+            end
 
-        if member_count == 0 then
-            storage.pneumatic_networks[net_id] = nil
-            release_network_id(net_id)
+            if member_count == 0 then
+                storage.pneumatic_networks[net_id] = nil
+                release_network_id(net_id)
+            end
         end
     end
 
@@ -196,7 +222,6 @@ local function rebuild_cluster(cluster, excluded_unit_number)
                         if tube_connections.is_join_only(neighbor) then
                             boundary_joiners[neighbor.unit_number] = neighbor
 
-                            -- Do NOT flood-fill across directional pneumatic pumps
                             if neighbor.name ~= "pneumatic-pump" and conn.target_port and conn.target_port.mode == "join_passthrough" then
                                 local opp_port = tube_connections.get_opposite_passthrough_port(neighbor, conn.target_port)
                                 if opp_port then
@@ -283,8 +308,7 @@ local function rebuild_cluster(cluster, excluded_unit_number)
 
             if net_ids then
                 for net_id, _ in pairs(net_ids) do
-                    local members = storage.pneumatic_networks[net_id]
-                    if members and table_size(members) == 1 then
+                    if is_private_sub_network(net_id) then
                         has_sub_network = true
                         break
                     end
@@ -309,6 +333,120 @@ local function rebuild_cluster(cluster, excluded_unit_number)
             end
         end
     end
+end
+
+local function on_entity_removed(e)
+    local entity = e.entity
+    if not entity then return end
+
+    local removed_unit_number = entity.unit_number
+    if not removed_unit_number then return end
+
+    local removed_position = {
+        x = entity.position.x,
+        y = entity.position.y,
+        surface = entity.surface
+    }
+
+    local direct_conns = tube_connections.get_adjacent_connections(entity)
+    local neighbors = {}
+    for _, conn in ipairs(direct_conns) do
+        if conn.neighbor and conn.neighbor.valid and conn.neighbor.unit_number ~= removed_unit_number then
+            table.insert(neighbors, conn.neighbor)
+        end
+    end
+
+    -- Target ONLY networks that the removed entity itself was directly a part of
+    local target_net_ids = {}
+    local removed_nets = storage.entity_to_network and storage.entity_to_network[removed_unit_number]
+    if removed_nets then
+        for net_id, _ in pairs(removed_nets) do
+            if not is_private_sub_network(net_id) then
+                target_net_ids[net_id] = true
+            end
+        end
+    end
+
+    local harvested_capsules = {}
+    if storage.pneumatic_networks then
+        for net_id, _ in pairs(target_net_ids) do
+            local net_struct = storage.pneumatic_networks[net_id]
+            if net_struct and net_struct.capsules then
+                for _, capsule in pairs(net_struct.capsules) do
+                    table.insert(harvested_capsules, capsule)
+                end
+            end
+        end
+    end
+
+    local raw_branches = {}
+    for _, neighbor in ipairs(neighbors) do
+        local branch = gather_physical_cluster({neighbor}, removed_unit_number)
+        if table_size(branch) > 0 then
+            table.insert(raw_branches, branch)
+        end
+    end
+
+    local merged_islands = {}
+    for _, branch in ipairs(raw_branches) do
+        local overlapping_indices = {}
+        for idx, existing_island in ipairs(merged_islands) do
+            local overlaps = false
+            for u_num, _ in pairs(branch) do
+                if existing_island[u_num] then
+                    overlaps = true
+                    break
+                end
+            end
+            if overlaps then
+                table.insert(overlapping_indices, idx)
+            end
+        end
+
+        if #overlapping_indices == 0 then
+            table.insert(merged_islands, branch)
+        else
+            local target_idx = overlapping_indices[1]
+            for u_num, member in pairs(branch) do
+                merged_islands[target_idx][u_num] = member
+            end
+            for i = #overlapping_indices, 2, -1 do
+                local other_idx = overlapping_indices[i]
+                for u_num, member in pairs(merged_islands[other_idx]) do
+                    merged_islands[target_idx][u_num] = member
+                end
+                table.remove(merged_islands, other_idx)
+            end
+        end
+    end
+
+    if storage.pneumatic_networks then
+        for net_id, _ in pairs(target_net_ids) do
+            local net_struct = storage.pneumatic_networks[net_id]
+            if net_struct then
+                for u_num, _ in pairs(net_struct) do
+                    if u_num ~= "capsules" and u_num ~= "length" and storage.entity_to_network and storage.entity_to_network[u_num] then
+                        storage.entity_to_network[u_num][net_id] = nil
+                        if table_size(storage.entity_to_network[u_num]) == 0 then
+                            storage.entity_to_network[u_num] = nil
+                        end
+                    end
+                end
+            end
+            storage.pneumatic_networks[net_id] = nil
+            release_network_id(net_id)
+        end
+    end
+
+    if storage.entity_to_network then
+        storage.entity_to_network[removed_unit_number] = nil
+    end
+
+    for _, island in ipairs(merged_islands) do
+        rebuild_cluster(island, removed_unit_number)
+    end
+
+    redistribute_harvested_capsules(harvested_capsules, removed_position)
 end
 
 --------------------------------------------------------------------------------
@@ -553,125 +691,7 @@ local function on_entity_built(e)
     end
 end
 
-local function on_entity_removed(e)
-    local entity = e.entity
-    if not entity then return end
 
-    local removed_unit_number = entity.unit_number
-    if not removed_unit_number then return end
-
-    local removed_position = {
-        x = entity.position.x,
-        y = entity.position.y,
-        surface = entity.surface
-    }
-
-    local direct_conns = tube_connections.get_adjacent_connections(entity)
-    local neighbors = {}
-    for _, conn in ipairs(direct_conns) do
-        if conn.neighbor and conn.neighbor.valid and conn.neighbor.unit_number ~= removed_unit_number then
-            table.insert(neighbors, conn.neighbor)
-        end
-    end
-
-    local target_net_ids = {}
-    local removed_nets = storage.entity_to_network and storage.entity_to_network[removed_unit_number]
-    if removed_nets then
-        for net_id, _ in pairs(removed_nets) do
-            target_net_ids[net_id] = true
-        end
-    end
-
-    for _, neighbor in ipairs(neighbors) do
-        local neighbor_nets = storage.entity_to_network and storage.entity_to_network[neighbor.unit_number]
-        if neighbor_nets then
-            for net_id, _ in pairs(neighbor_nets) do
-                target_net_ids[net_id] = true
-            end
-        end
-    end
-
-    local harvested_capsules = {}
-    if storage.pneumatic_networks then
-        for net_id, _ in pairs(target_net_ids) do
-            local net_struct = storage.pneumatic_networks[net_id]
-            if net_struct and net_struct.capsules then
-                for _, capsule in pairs(net_struct.capsules) do
-                    table.insert(harvested_capsules, capsule)
-                end
-            end
-        end
-    end
-
-    local raw_branches = {}
-    for _, neighbor in ipairs(neighbors) do
-        local branch = gather_physical_cluster({neighbor}, removed_unit_number)
-        if table_size(branch) > 0 then
-            table.insert(raw_branches, branch)
-        end
-    end
-
-    local merged_islands = {}
-    for _, branch in ipairs(raw_branches) do
-        local overlapping_indices = {}
-        for idx, existing_island in ipairs(merged_islands) do
-            local overlaps = false
-            for u_num, _ in pairs(branch) do
-                if existing_island[u_num] then
-                    overlaps = true
-                    break
-                end
-            end
-            if overlaps then
-                table.insert(overlapping_indices, idx)
-            end
-        end
-
-        if #overlapping_indices == 0 then
-            table.insert(merged_islands, branch)
-        else
-            local target_idx = overlapping_indices[1]
-            for u_num, member in pairs(branch) do
-                merged_islands[target_idx][u_num] = member
-            end
-            for i = #overlapping_indices, 2, -1 do
-                local other_idx = overlapping_indices[i]
-                for u_num, member in pairs(merged_islands[other_idx]) do
-                    merged_islands[target_idx][u_num] = member
-                end
-                table.remove(merged_islands, other_idx)
-            end
-        end
-    end
-
-    if storage.pneumatic_networks then
-        for net_id, _ in pairs(target_net_ids) do
-            local net_struct = storage.pneumatic_networks[net_id]
-            if net_struct then
-                for u_num, _ in pairs(net_struct) do
-                    if u_num ~= "capsules" and u_num ~= "length" and storage.entity_to_network and storage.entity_to_network[u_num] then
-                        storage.entity_to_network[u_num][net_id] = nil
-                        if table_size(storage.entity_to_network[u_num]) == 0 then
-                            storage.entity_to_network[u_num] = nil
-                        end
-                    end
-                end
-            end
-            storage.pneumatic_networks[net_id] = nil
-            release_network_id(net_id)
-        end
-    end
-
-    if storage.entity_to_network then
-        storage.entity_to_network[removed_unit_number] = nil
-    end
-
-    for _, island in ipairs(merged_islands) do
-        rebuild_cluster(island, removed_unit_number)
-    end
-
-    redistribute_harvested_capsules(harvested_capsules, removed_position)
-end
 
 local function on_selected_entity_changed(e)
     local player = game.get_player(e.player_index)
