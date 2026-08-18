@@ -171,20 +171,28 @@ local function rebuild_cluster(cluster, excluded_unit_number)
     storage.pneumatic_networks = storage.pneumatic_networks or {}
     storage.entity_to_network = storage.entity_to_network or {}
 
-    -- Unbind cluster entities ONLY from shared networks, keeping private internal networks intact
+    -- Identify existing private 1-member sub-networks so their entity mappings are NOT wiped
+    local preserved_sub_nets = {}
+    for net_id, _ in pairs(storage.pneumatic_networks) do
+        if is_private_sub_network(net_id) then
+            preserved_sub_nets[net_id] = true
+        end
+    end
+
+    -- Clear entity mappings ONLY for shared networks passing through the cluster
     for u_num, _ in pairs(cluster) do
         if storage.entity_to_network[u_num] then
             for net_id, _ in pairs(storage.entity_to_network[u_num]) do
-                if not is_private_sub_network(net_id) then
+                if not preserved_sub_nets[net_id] then
                     storage.entity_to_network[u_num][net_id] = nil
                 end
             end
         end
     end
 
-    -- Clean up shared tube networks
+    -- Remove cluster entities ONLY from shared networks being rebuilt
     for net_id, members in pairs(storage.pneumatic_networks) do
-        if not is_private_sub_network(net_id) then
+        if not preserved_sub_nets[net_id] then
             for u_num, _ in pairs(cluster) do
                 members[u_num] = nil
             end
@@ -356,7 +364,6 @@ local function on_entity_removed(e)
         end
     end
 
-    -- Target ONLY networks that the removed entity itself was directly a part of
     local target_net_ids = {}
     local removed_nets = storage.entity_to_network and storage.entity_to_network[removed_unit_number]
     if removed_nets then
@@ -448,6 +455,9 @@ local function on_entity_removed(e)
 
     redistribute_harvested_capsules(harvested_capsules, removed_position)
 end
+
+
+
 
 --------------------------------------------------------------------------------
 -- UI DATA PROVIDER
