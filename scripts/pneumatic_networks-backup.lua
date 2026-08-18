@@ -234,39 +234,29 @@ local function rebuild_cluster(cluster, excluded_unit_number)
         end
     end
 
-    -- Step 2: Direct Join <-> Join Connections (Pumps touching Hubs directly)
-    local processed_join_pairs = {}
-
+    -- Step 2: Entity Primary Networks (Every Joiner gets 1 master network spanning itself + connected neighbors)
     for u_num, entity in pairs(cluster) do
         if entity.valid and u_num ~= excluded_unit_number and tube_connections.is_join_only(entity) then
             local conns = tube_connections.get_adjacent_connections(entity)
-            for _, conn in ipairs(conns) do
-                local neighbor = conn.neighbor
-                if neighbor and neighbor.valid and neighbor.unit_number ~= excluded_unit_number and tube_connections.is_join_only(neighbor) then
-                    if conn.source_port and conn.source_port.mode == "join"
-                       and conn.target_port and conn.target_port.mode == "join" then
-                        local n_num = neighbor.unit_number
-                        local pair_key = u_num < n_num and (u_num .. "_" .. n_num) or (n_num .. "_" .. u_num)
+            if #conns > 0 then
+                local entity_net_id = allocate_fresh_network_id()
+                local net_members = { [u_num] = entity }
+                bind_entity_to_network(u_num, entity_net_id)
 
-                        if not processed_join_pairs[pair_key] then
-                            processed_join_pairs[pair_key] = true
-
-                            local net_id = allocate_fresh_network_id()
-                            local net_members = {
-                                [u_num] = entity,
-                                [n_num] = neighbor
-                            }
-                            bind_entity_to_network(u_num, net_id)
-                            bind_entity_to_network(n_num, net_id)
-                            storage.pneumatic_networks[net_id] = net_members
-                        end
+                for _, conn in ipairs(conns) do
+                    local neighbor = conn.neighbor
+                    if neighbor and neighbor.valid and neighbor.unit_number ~= excluded_unit_number then
+                        net_members[neighbor.unit_number] = neighbor
+                        bind_entity_to_network(neighbor.unit_number, entity_net_id)
                     end
                 end
+
+                storage.pneumatic_networks[entity_net_id] = net_members
             end
         end
     end
 
-    -- Step 3: Single-member fallback ONLY for completely unconnected entities
+    -- Step 3: Isolated single-member fallback (ONLY for entities with 0 connections)
     for u_num, entity in pairs(cluster) do
         if entity.valid and u_num ~= excluded_unit_number then
             local net_ids = storage.entity_to_network[u_num]
