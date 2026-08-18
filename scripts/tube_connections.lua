@@ -12,12 +12,12 @@ connections.definitions = {
         },
         ports = {
             ["horizontal"] = {
-                { offset = {x = -2.0, y = 0.0}, mode = "merge", port_id = "west" },
-                { offset = {x =  2.0, y = 0.0}, mode = "merge", port_id = "east" },
+                { offset = {x = -1.0, y = 0.0}, mode = "merge", port_id = "west" },
+                { offset = {x =  1.0, y = 0.0}, mode = "merge", port_id = "east" },
             },
             ["vertical"] = {
-                { offset = {x = 0.0, y = -2.0}, mode = "merge", port_id = "north" },
-                { offset = {x = 0.0, y =  2.0}, mode = "merge", port_id = "south" },
+                { offset = {x = 0.0, y = -1.0}, mode = "merge", port_id = "north" },
+                { offset = {x = 0.0, y =  1.0}, mode = "merge", port_id = "south" },
             },
         },
         can_connect = function(source, target, source_port, target_port)
@@ -34,20 +34,20 @@ connections.definitions = {
         },
         ports = {
             ["north"] = {
-                { offset = {x = 0.0, y = -2.0}, mode = "join", port_id = "output" },
-                { offset = {x = 0.0, y =  2.0}, mode = "join", port_id = "input"  },
+                { offset = {x = 0.0, y = -1.0}, mode = "join", port_id = "output" },
+                { offset = {x = 0.0, y =  1.0}, mode = "join", port_id = "input"  },
             },
             ["south"] = {
-                { offset = {x = 0.0, y =  2.0}, mode = "join", port_id = "output" },
-                { offset = {x = 0.0, y = -2.0}, mode = "join", port_id = "input"  },
+                { offset = {x = 0.0, y =  1.0}, mode = "join", port_id = "output" },
+                { offset = {x = 0.0, y = -1.0}, mode = "join", port_id = "input"  },
             },
             ["east"] = {
-                { offset = {x =  2.0, y = 0.0}, mode = "join", port_id = "output" },
-                { offset = {x = -2.0, y = 0.0}, mode = "join", port_id = "input"  },
+                { offset = {x =  1.0, y = 0.0}, mode = "join", port_id = "output" },
+                { offset = {x = -1.0, y = 0.0}, mode = "join", port_id = "input"  },
             },
             ["west"] = {
-                { offset = {x = -2.0, y = 0.0}, mode = "join", port_id = "output" },
-                { offset = {x =  2.0, y = 0.0}, mode = "join", port_id = "input"  },
+                { offset = {x = -1.0, y = 0.0}, mode = "join", port_id = "output" },
+                { offset = {x =  1.0, y = 0.0}, mode = "join", port_id = "input"  },
             },
         },
         can_connect = function(source, target, source_port, target_port)
@@ -65,16 +65,16 @@ connections.definitions = {
         ports = {
             ["default"] = {
                 -- End Join Ports (West & East)
-                { offset = {x = -2.0, y = 0.0}, mode = "join", port_id = "west_end" },
-                { offset = {x =  2.0, y = 0.0}, mode = "join", port_id = "east_end" },
+                { offset = {x = -1.0, y = 0.0}, mode = "join", port_id = "west_end" },
+                { offset = {x =  1.0, y = 0.0}, mode = "join", port_id = "east_end" },
 
                 -- North Side Join Ports
-                { offset = {x = -0.5, y = -1.0}, mode = "join", port_id = "north_west" },
-                { offset = {x =  0.5, y = -1.0}, mode = "join", port_id = "north_east" },
+                { offset = {x = -0.5, y = -0.5}, mode = "join", port_id = "north_west" },
+                { offset = {x =  0.5, y = -0.5}, mode = "join", port_id = "north_east" },
 
                 -- South Side Join Ports
-                { offset = {x = -0.5, y =  1.0}, mode = "join", port_id = "south_west" },
-                { offset = {x =  0.5, y =  1.0}, mode = "join", port_id = "south_east" },
+                { offset = {x = -0.5, y =  0.5}, mode = "join", port_id = "south_west" },
+                { offset = {x =  0.5, y =  0.5}, mode = "join", port_id = "south_east" },
             },
         },
         can_connect = function(source, target, source_port, target_port)
@@ -92,16 +92,16 @@ connections.definitions = {
         ports = {
             ["default"] = {
                 -- End Join Ports (North & South)
-                { offset = {x = 0.0, y = -2.0}, mode = "join", port_id = "north_end" },
-                { offset = {x = 0.0, y =  2.0}, mode = "join", port_id = "south_end" },
+                { offset = {x = 0.0, y = -1.0}, mode = "join", port_id = "north_end" },
+                { offset = {x = 0.0, y =  1.0}, mode = "join", port_id = "south_end" },
 
                 -- West Side Join Ports
-                { offset = {x = -1.0, y = -0.5}, mode = "join", port_id = "west_north" },
-                { offset = {x = -1.0, y =  0.5}, mode = "join", port_id = "west_south" },
+                { offset = {x = -0.5, y = -0.5}, mode = "join", port_id = "west_north" },
+                { offset = {x = -0.5, y =  0.5}, mode = "join", port_id = "west_south" },
 
                 -- East Side Join Ports
-                { offset = {x =  1.0, y = -0.5}, mode = "join", port_id = "east_north" },
-                { offset = {x =  1.0, y =  0.5}, mode = "join", port_id = "east_south" },
+                { offset = {x =  0.5, y = -0.5}, mode = "join", port_id = "east_north" },
+                { offset = {x =  0.5, y =  0.5}, mode = "join", port_id = "east_south" },
             },
         },
         can_connect = function(source, target, source_port, target_port)
