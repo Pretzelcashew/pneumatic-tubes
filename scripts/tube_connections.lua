@@ -138,17 +138,6 @@ function connections.get_offsets(entity)
     return offsets
 end
 
---- 0.6 tolerance accommodates 0.5 tile center shifts between 1x2 and 2x1 entities
-function connections.get_port_at_offset(entity, offset_x, offset_y)
-    local ports = connections.get_ports(entity)
-    for _, port in ipairs(ports) do
-        if math.abs(port.offset.x - offset_x) < 0.6 and math.abs(port.offset.y - offset_y) < 0.6 then
-            return port
-        end
-    end
-    return nil
-end
-
 function connections.is_join_only(entity)
     local ports = connections.get_ports(entity)
     if #ports == 0 then return false end
@@ -160,49 +149,7 @@ function connections.is_join_only(entity)
     return true
 end
 
-function connections.get_opposite_passthrough_port(entity, port)
-    if not (entity and entity.valid and port and port.pair_id) then return nil end
-    local ports = connections.get_ports(entity)
-    for _, other_port in ipairs(ports) do
-        if other_port.pair_id == port.pair_id and other_port.port_id ~= port.port_id then
-            return other_port
-        end
-    end
-    return nil
-end
-
-function connections.get_passthrough_pairs(entity)
-    if not (entity and entity.valid) then return {} end
-    local ports = connections.get_ports(entity)
-    local channels = {}
-
-    for _, port in ipairs(ports) do
-        if port.pair_id then
-            channels[port.pair_id] = channels[port.pair_id] or {}
-            table.insert(channels[port.pair_id], port)
-        end
-    end
-
-    return channels
-end
-
-function connections.can_connect_entities(source, target)
-    if not (source and source.valid and target and target.valid) then return false end
-
-    local source_def = connections.definitions[source.name]
-    local target_def = connections.definitions[target.name]
-    if not (source_def and target_def) then return false end
-
-    local dx = target.position.x - source.position.x
-    local dy = target.position.y - source.position.y
-
-    local source_port = connections.get_port_at_offset(source, dx, dy)
-    local target_port = connections.get_port_at_offset(target, -dx, -dy)
-
-    return source_def.can_connect(source, target, source_port, target_port)
-end
-
---- Scans entity ports and returns all connected valid neighbors
+--- World-space proximity scanning to reliably detect adjacent ports
 function connections.get_adjacent_connections(entity, ignore_unit_number)
     local result = {}
     if not (entity and entity.valid) then return result end
@@ -210,24 +157,31 @@ function connections.get_adjacent_connections(entity, ignore_unit_number)
     local surface = entity.surface
     local ports = connections.get_ports(entity)
 
-    for _, port in ipairs(ports) do
-        local world_pos = {
-            x = entity.position.x + port.offset.x,
-            y = entity.position.y + port.offset.y
+    for _, source_port in ipairs(ports) do
+        local source_world_pos = {
+            x = entity.position.x + source_port.offset.x,
+            y = entity.position.y + source_port.offset.y
         }
-        local found = surface.find_entities_filtered{position = world_pos, radius = 1.0}
+        local found = surface.find_entities_filtered{position = source_world_pos, radius = 1.5}
         for _, e in ipairs(found) do
             if e.valid and e.unit_number ~= entity.unit_number and e.unit_number ~= ignore_unit_number then
                 if connections.is_connectable(e.name) then
-                    local dx = e.position.x - entity.position.x
-                    local dy = e.position.y - entity.position.y
-                    local target_port = connections.get_port_at_offset(e, -dx, -dy)
-                    if target_port then
-                        table.insert(result, {
-                            neighbor = e,
-                            source_port = port,
-                            target_port = target_port
-                        })
+                    local neighbor_ports = connections.get_ports(e)
+                    for _, target_port in ipairs(neighbor_ports) do
+                        local target_world_pos = {
+                            x = e.position.x + target_port.offset.x,
+                            y = e.position.y + target_port.offset.y
+                        }
+                        local dx = source_world_pos.x - target_world_pos.x
+                        local dy = source_world_pos.y - target_world_pos.y
+                        if (dx * dx + dy * dy) < 1.0 then
+                            table.insert(result, {
+                                neighbor = e,
+                                source_port = source_port,
+                                target_port = target_port
+                            })
+                            break
+                        end
                     end
                 end
             end
