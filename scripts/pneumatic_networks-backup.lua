@@ -574,6 +574,7 @@ local function on_entity_removed(e)
         end
     end
 
+    -- ONLY target networks that directly belonged to the removed entity itself
     local target_net_ids = {}
     local removed_nets = storage.entity_to_network and storage.entity_to_network[removed_unit_number]
     if removed_nets then
@@ -582,15 +583,7 @@ local function on_entity_removed(e)
         end
     end
 
-    for _, neighbor in ipairs(neighbors) do
-        local neighbor_nets = storage.entity_to_network and storage.entity_to_network[neighbor.unit_number]
-        if neighbor_nets then
-            for net_id, _ in pairs(neighbor_nets) do
-                target_net_ids[net_id] = true
-            end
-        end
-    end
-
+    -- Harvest capsules ONLY from networks the removed tile was actually a part of
     local harvested_capsules = {}
     if storage.pneumatic_networks then
         for net_id, _ in pairs(target_net_ids) do
