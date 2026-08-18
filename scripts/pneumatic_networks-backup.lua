@@ -164,6 +164,10 @@ local DIRECTION_NAMES = {
 
 local function get_network_info(entity)
     if not (entity and entity.valid) then return nil end
+    
+    -- Lazy require to prevent nil references or circular dependency loops
+    local capsule_transport = require("scripts.capsule_transport")
+    
     sanitize_network_storage()
 
     local net_ids = storage.entity_to_network and storage.entity_to_network[entity.unit_number]
