@@ -2,6 +2,7 @@ local event_manager = require("scripts.events")
 local gui_info = require("scripts.gui_info")
 local tube_connections = require("scripts.tube_connections")
 local capsule_evaluator = require("scripts.capsule_evaluator")
+local capsule_transport = require("scripts.capsule_transport")
 
 --------------------------------------------------------------------------------
 -- HELPER & CLUSTER MANAGEMENT
@@ -165,8 +166,6 @@ local DIRECTION_NAMES = {
 local function get_network_info(entity)
     if not (entity and entity.valid) then return nil end
     
-    -- Lazy require to prevent nil references or circular dependency loops
-    local capsule_transport = require("scripts.capsule_transport")
     
     sanitize_network_storage()
 
