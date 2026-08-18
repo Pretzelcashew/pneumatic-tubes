@@ -50,6 +50,47 @@ local function merge_network_capsules(source_net_id, dest_net_id)
     source_net.capsules = nil
 end
 
+local function cleanup_standalone_subnetworks(u_num)
+    local net_ids = storage.entity_to_network and storage.entity_to_network[u_num]
+    if not net_ids then return end
+
+    local shared_net_ids = {}
+    local standalone_ids = {}
+
+    for net_id, _ in pairs(net_ids) do
+        local net = storage.pneumatic_networks and storage.pneumatic_networks[net_id]
+        if net then
+            local member_count = 0
+            for k, _ in pairs(net) do
+                if k ~= "capsules" and k ~= "length" then
+                    member_count = member_count + 1
+                end
+            end
+            if member_count == 1 then
+                table.insert(standalone_ids, net_id)
+            elseif member_count > 1 then
+                table.insert(shared_net_ids, net_id)
+            end
+        end
+    end
+
+    -- If the entity is connected to at least one multi-member network, purge phantom 1-member fallback networks
+    if #shared_net_ids > 0 then
+        local primary_shared_id = shared_net_ids[1]
+        for _, net_id in ipairs(standalone_ids) do
+            merge_network_capsules(net_id, primary_shared_id)
+            storage.pneumatic_networks[net_id] = nil
+            if storage.entity_to_network[u_num] then
+                storage.entity_to_network[u_num][net_id] = nil
+            end
+            release_network_id(net_id)
+        end
+        if storage.entity_to_network[u_num] and table_size(storage.entity_to_network[u_num]) == 0 then
+            storage.entity_to_network[u_num] = nil
+        end
+    end
+end
+
 local function redistribute_harvested_capsules(harvested_capsules, fallback_pos)
     if not harvested_capsules or #harvested_capsules == 0 then return end
 
@@ -112,6 +153,10 @@ local function sanitize_network_storage()
             release_network_id(net_id)
         end
     end
+
+    for u_num, _ in pairs(storage.entity_to_network) do
+        cleanup_standalone_subnetworks(u_num)
+    end
 end
 
 local function gather_physical_cluster(initial_entities, excluded_unit_number)
@@ -165,7 +210,6 @@ local DIRECTION_NAMES = {
 
 local function get_network_info(entity)
     if not (entity and entity.valid) then return nil end
-    
     
     sanitize_network_storage()
 
@@ -303,10 +347,12 @@ local function on_entity_built(e)
                 storage.pneumatic_networks[target_net_id][joiner.unit_number] = joiner
                 bind_entity_to_network(joiner.unit_number, target_net_id)
             end
+            cleanup_standalone_subnetworks(joiner.unit_number)
         end
 
     else
         -- JOIN-ONLY PLACEMENT (Hubs & Pumps): Pure boundaries, NEVER merge networks
+        local connected_to_tube = false
         for _, conn in ipairs(conns) do
             local neighbor = conn.neighbor
             if neighbor and neighbor.valid then
@@ -319,21 +365,27 @@ local function on_entity_built(e)
                     }
                     bind_entity_to_network(u_num, net_id)
                     bind_entity_to_network(n_num, net_id)
+                    connected_to_tube = true
                 else
                     local nets = storage.entity_to_network[n_num]
                     if nets then
                         for net_id, _ in pairs(nets) do
                             storage.pneumatic_networks[net_id][u_num] = entity
                             bind_entity_to_network(u_num, net_id)
+                            connected_to_tube = true
                         end
                     end
                 end
             end
         end
 
-        local sub_net_id = allocate_fresh_network_id()
-        storage.pneumatic_networks[sub_net_id] = { [u_num] = entity }
-        bind_entity_to_network(u_num, sub_net_id)
+        -- Allocate a standalone sub-network ONLY if the hub/pump is completely isolated
+        if not connected_to_tube then
+            local sub_net_id = allocate_fresh_network_id()
+            storage.pneumatic_networks[sub_net_id] = { [u_num] = entity }
+            bind_entity_to_network(u_num, sub_net_id)
+        end
+        cleanup_standalone_subnetworks(u_num)
     end
 end
 
@@ -433,6 +485,7 @@ local function rebuild_cluster(cluster, excluded_unit_number)
             for j_num, joiner in pairs(boundary_joiners) do
                 net_members[j_num] = joiner
                 bind_entity_to_network(j_num, net_id)
+                cleanup_standalone_subnetworks(j_num)
             end
 
             storage.pneumatic_networks[net_id] = net_members
@@ -471,34 +524,14 @@ local function rebuild_cluster(cluster, excluded_unit_number)
     end
 
     for u_num, entity in pairs(cluster) do
-        if entity.valid and tube_connections.is_join_only(entity) then
-            local net_ids = storage.entity_to_network[u_num]
-            local has_sub_network = false
-
-            if net_ids then
-                for net_id, _ in pairs(net_ids) do
-                    if is_private_sub_network(net_id) then
-                        has_sub_network = true
-                        break
-                    end
-                end
-            end
-
-            if not has_sub_network then
-                local net_id = allocate_fresh_network_id()
-                bind_entity_to_network(u_num, net_id)
-                storage.pneumatic_networks[net_id] = { [u_num] = entity }
-            end
-        end
-    end
-
-    for u_num, entity in pairs(cluster) do
         if entity.valid then
             local net_ids = storage.entity_to_network[u_num]
             if not net_ids or table_size(net_ids) == 0 then
                 local net_id = allocate_fresh_network_id()
                 bind_entity_to_network(u_num, net_id)
                 storage.pneumatic_networks[net_id] = { [u_num] = entity }
+            else
+                cleanup_standalone_subnetworks(u_num)
             end
         end
     end
