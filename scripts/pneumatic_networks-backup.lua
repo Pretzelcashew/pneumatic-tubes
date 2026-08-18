@@ -155,48 +155,23 @@ local function rebuild_cluster(cluster, excluded_unit_number)
     storage.pneumatic_networks = storage.pneumatic_networks or {}
     storage.entity_to_network = storage.entity_to_network or {}
 
-    -- Identify private 1-member networks (like a Hub's internal storage graph) so they are preserved
-    local private_sub_nets = {}
-    for net_id, members in pairs(storage.pneumatic_networks) do
-        local count = 0
-        local solo_ent = nil
-        for k, ent in pairs(members) do
-            if k ~= "capsules" and k ~= "length" then
-                count = count + 1
-                solo_ent = ent
-            end
-        end
-        if count == 1 and solo_ent and tube_connections.is_join_only(solo_ent) then
-            private_sub_nets[net_id] = true
-        end
-    end
-
-    -- Clear cluster entities ONLY from shared networks passing through the cluster
     for u_num, _ in pairs(cluster) do
-        if storage.entity_to_network[u_num] then
-            for net_id, _ in pairs(storage.entity_to_network[u_num]) do
-                if not private_sub_nets[net_id] then
-                    storage.entity_to_network[u_num][net_id] = nil
-                end
-            end
-        end
+        storage.entity_to_network[u_num] = nil
     end
 
     for net_id, members in pairs(storage.pneumatic_networks) do
-        if not private_sub_nets[net_id] then
-            for u_num, _ in pairs(cluster) do
-                members[u_num] = nil
-            end
+        for u_num, _ in pairs(cluster) do
+            members[u_num] = nil
+        end
 
-            local member_count = 0
-            for k, _ in pairs(members) do
-                if k ~= "capsules" and k ~= "length" then member_count = member_count + 1 end
-            end
+        local member_count = 0
+        for k, _ in pairs(members) do
+            if k ~= "capsules" and k ~= "length" then member_count = member_count + 1 end
+        end
 
-            if member_count == 0 then
-                storage.pneumatic_networks[net_id] = nil
-                release_network_id(net_id)
-            end
+        if member_count == 0 then
+            storage.pneumatic_networks[net_id] = nil
+            release_network_id(net_id)
         end
     end
 
@@ -221,6 +196,7 @@ local function rebuild_cluster(cluster, excluded_unit_number)
                         if tube_connections.is_join_only(neighbor) then
                             boundary_joiners[neighbor.unit_number] = neighbor
 
+                            -- Do NOT flood-fill across directional pneumatic pumps
                             if neighbor.name ~= "pneumatic-pump" and conn.target_port and conn.target_port.mode == "join_passthrough" then
                                 local opp_port = tube_connections.get_opposite_passthrough_port(neighbor, conn.target_port)
                                 if opp_port then
@@ -598,26 +574,23 @@ local function on_entity_removed(e)
         end
     end
 
-    -- Target ONLY shared network graphs that pass directly through the removed tile
     local target_net_ids = {}
     local removed_nets = storage.entity_to_network and storage.entity_to_network[removed_unit_number]
     if removed_nets then
         for net_id, _ in pairs(removed_nets) do
-            local net_struct = storage.pneumatic_networks and storage.pneumatic_networks[net_id]
-            if net_struct then
-                local member_count = 0
-                for k, _ in pairs(net_struct) do
-                    if k ~= "capsules" and k ~= "length" then member_count = member_count + 1 end
-                end
-                -- Do not tear down private single-member sub-networks
-                if member_count > 1 then
-                    target_net_ids[net_id] = true
-                end
+            target_net_ids[net_id] = true
+        end
+    end
+
+    for _, neighbor in ipairs(neighbors) do
+        local neighbor_nets = storage.entity_to_network and storage.entity_to_network[neighbor.unit_number]
+        if neighbor_nets then
+            for net_id, _ in pairs(neighbor_nets) do
+                target_net_ids[net_id] = true
             end
         end
     end
 
-    -- Harvest capsules strictly traveling inside the shared tube graph being destroyed
     local harvested_capsules = {}
     if storage.pneumatic_networks then
         for net_id, _ in pairs(target_net_ids) do
@@ -671,7 +644,6 @@ local function on_entity_removed(e)
         end
     end
 
-    -- Tear down ONLY the shared multi-entity networks that passed through the mined tile
     if storage.pneumatic_networks then
         for net_id, _ in pairs(target_net_ids) do
             local net_struct = storage.pneumatic_networks[net_id]
@@ -694,7 +666,6 @@ local function on_entity_removed(e)
         storage.entity_to_network[removed_unit_number] = nil
     end
 
-    -- Rebuild shared networks for remaining connected islands
     for _, island in ipairs(merged_islands) do
         rebuild_cluster(island, removed_unit_number)
     end
