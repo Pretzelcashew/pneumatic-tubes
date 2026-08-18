@@ -494,7 +494,7 @@ event_manager.register(defines.events.on_tick, update_selected_gui)
 local build_events = {
     defines.events.on_built_entity,
     defines.events.on_robot_built_entity,
-    defines.script_raised_built,
+    defines.events.script_raised_built,
     defines.events.on_entity_cloned,
 }
 if defines.events.on_space_platform_built_entity then
@@ -505,7 +505,7 @@ local remove_events = {
     defines.events.on_player_mined_entity,
     defines.events.on_robot_mined_entity,
     defines.events.on_entity_died,
-    defines.script_raised_destroy,
+    defines.events.script_raised_destroy,
 }
 if defines.events.on_space_platform_mined_entity then
     table.insert(remove_events, defines.events.on_space_platform_mined_entity)
