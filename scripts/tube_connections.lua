@@ -64,17 +64,17 @@ connections.definitions = {
         },
         ports = {
             ["default"] = {
-                -- Ends (West & East) - Independent Join Only
-                { offset = {x = -2, y = 0}, mode = "join", port_id = "west_end" },
-                { offset = {x =  2, y = 0}, mode = "join", port_id = "east_end" },
+                -- End Join Ports (West & East)
+                { offset = {x = -2.0, y = 0.0}, mode = "join", port_id = "west_end" },
+                { offset = {x =  2.0, y = 0.0}, mode = "join", port_id = "east_end" },
 
-                -- West Side Ports - Independent Join Only
-                { offset = {x = -0.5, y = -1}, mode = "join", port_id = "north_west" },
-                { offset = {x = -0.5, y =  1}, mode = "join", port_id = "south_west" },
+                -- North Side Join Ports
+                { offset = {x = -0.5, y = -1.0}, mode = "join", port_id = "north_west" },
+                { offset = {x =  0.5, y = -1.0}, mode = "join", port_id = "north_east" },
 
-                -- East Side Ports - Independent Join Only
-                { offset = {x =  0.5, y = -1}, mode = "join", port_id = "north_east" },
-                { offset = {x =  0.5, y =  1}, mode = "join", port_id = "south_east" },
+                -- South Side Join Ports
+                { offset = {x = -0.5, y =  1.0}, mode = "join", port_id = "south_west" },
+                { offset = {x =  0.5, y =  1.0}, mode = "join", port_id = "south_east" },
             },
         },
         can_connect = function(source, target, source_port, target_port)
@@ -91,17 +91,17 @@ connections.definitions = {
         },
         ports = {
             ["default"] = {
-                -- Ends (North & South) - Independent Join Only
-                { offset = {x = 0, y = -2}, mode = "join", port_id = "north_end" },
-                { offset = {x = 0, y =  2}, mode = "join", port_id = "south_end" },
+                -- End Join Ports (North & South)
+                { offset = {x = 0.0, y = -2.0}, mode = "join", port_id = "north_end" },
+                { offset = {x = 0.0, y =  2.0}, mode = "join", port_id = "south_end" },
 
-                -- North Side Ports - Independent Join Only
-                { offset = {x = -1, y = -0.5}, mode = "join", port_id = "west_north" },
-                { offset = {x =  1, y = -0.5}, mode = "join", port_id = "east_north" },
+                -- West Side Join Ports
+                { offset = {x = -1.0, y = -0.5}, mode = "join", port_id = "west_north" },
+                { offset = {x = -1.0, y =  0.5}, mode = "join", port_id = "west_south" },
 
-                -- South Side Ports - Independent Join Only
-                { offset = {x = -1, y =  0.5}, mode = "join", port_id = "west_south" },
-                { offset = {x =  1, y =  0.5}, mode = "join", port_id = "east_south" },
+                -- East Side Join Ports
+                { offset = {x =  1.0, y = -0.5}, mode = "join", port_id = "east_north" },
+                { offset = {x =  1.0, y =  0.5}, mode = "join", port_id = "east_south" },
             },
         },
         can_connect = function(source, target, source_port, target_port)
@@ -138,6 +138,17 @@ function connections.get_offsets(entity)
     return offsets
 end
 
+--- 0.6 tolerance accommodates 0.5 tile center shifts between 1x2 and 2x1 entities
+function connections.get_port_at_offset(entity, offset_x, offset_y)
+    local ports = connections.get_ports(entity)
+    for _, port in ipairs(ports) do
+        if math.abs(port.offset.x - offset_x) < 0.6 and math.abs(port.offset.y - offset_y) < 0.6 then
+            return port
+        end
+    end
+    return nil
+end
+
 function connections.is_join_only(entity)
     local ports = connections.get_ports(entity)
     if #ports == 0 then return false end
@@ -149,7 +160,23 @@ function connections.is_join_only(entity)
     return true
 end
 
---- World-space proximity scanning to reliably detect adjacent ports
+function connections.can_connect_entities(source, target)
+    if not (source and source.valid and target and target.valid) then return false end
+
+    local source_def = connections.definitions[source.name]
+    local target_def = connections.definitions[target.name]
+    if not (source_def and target_def) then return false end
+
+    local dx = target.position.x - source.position.x
+    local dy = target.position.y - source.position.y
+
+    local source_port = connections.get_port_at_offset(source, dx, dy)
+    local target_port = connections.get_port_at_offset(target, -dx, -dy)
+
+    return source_def.can_connect(source, target, source_port, target_port)
+end
+
+--- Scans entity ports and returns all connected valid neighbors
 function connections.get_adjacent_connections(entity, ignore_unit_number)
     local result = {}
     if not (entity and entity.valid) then return result end
@@ -157,31 +184,24 @@ function connections.get_adjacent_connections(entity, ignore_unit_number)
     local surface = entity.surface
     local ports = connections.get_ports(entity)
 
-    for _, source_port in ipairs(ports) do
-        local source_world_pos = {
-            x = entity.position.x + source_port.offset.x,
-            y = entity.position.y + source_port.offset.y
+    for _, port in ipairs(ports) do
+        local world_pos = {
+            x = entity.position.x + port.offset.x,
+            y = entity.position.y + port.offset.y
         }
-        local found = surface.find_entities_filtered{position = source_world_pos, radius = 1.5}
+        local found = surface.find_entities_filtered{position = world_pos, radius = 1.0}
         for _, e in ipairs(found) do
             if e.valid and e.unit_number ~= entity.unit_number and e.unit_number ~= ignore_unit_number then
                 if connections.is_connectable(e.name) then
-                    local neighbor_ports = connections.get_ports(e)
-                    for _, target_port in ipairs(neighbor_ports) do
-                        local target_world_pos = {
-                            x = e.position.x + target_port.offset.x,
-                            y = e.position.y + target_port.offset.y
-                        }
-                        local dx = source_world_pos.x - target_world_pos.x
-                        local dy = source_world_pos.y - target_world_pos.y
-                        if (dx * dx + dy * dy) < 1.0 then
-                            table.insert(result, {
-                                neighbor = e,
-                                source_port = source_port,
-                                target_port = target_port
-                            })
-                            break
-                        end
+                    local dx = e.position.x - entity.position.x
+                    local dy = e.position.y - entity.position.y
+                    local target_port = connections.get_port_at_offset(e, -dx, -dy)
+                    if target_port then
+                        table.insert(result, {
+                            neighbor = e,
+                            source_port = port,
+                            target_port = target_port
+                        })
                     end
                 end
             end
