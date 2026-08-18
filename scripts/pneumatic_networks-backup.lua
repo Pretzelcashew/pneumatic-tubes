@@ -159,10 +159,31 @@ end
 local function rebuild_cluster(cluster, excluded_unit_number)
     storage.pneumatic_networks = storage.pneumatic_networks or {}
     storage.entity_to_network = storage.entity_to_network or {}
+    storage.primary_networks = storage.primary_networks or {}
+
+    -- Step -1: Preserve all in-flight capsules in this cluster before wiping network tables
+    local active_capsules = {}
+    for u_num, _ in pairs(cluster) do
+        if u_num ~= excluded_unit_number then
+            local old_nets = storage.entity_to_network[u_num]
+            if old_nets then
+                for net_id, _ in pairs(old_nets) do
+                    local net = storage.pneumatic_networks[net_id]
+                    if net and net.capsules then
+                        for cap_id, capsule in pairs(net.capsules) do
+                            active_capsules[cap_id] = capsule
+                        end
+                        net.capsules = nil
+                    end
+                end
+            end
+        end
+    end
 
     -- Step 0: Unbind all entities in this cluster from their current networks
     for u_num, entity in pairs(cluster) do
         if u_num ~= excluded_unit_number then
+            storage.primary_networks[u_num] = nil
             local old_nets = storage.entity_to_network[u_num]
             if old_nets then
                 for net_id, _ in pairs(old_nets) do
@@ -231,6 +252,15 @@ local function rebuild_cluster(cluster, excluded_unit_number)
             end
 
             storage.pneumatic_networks[net_id] = net_members
+
+            -- Migrate preserved capsules into the newly built tube network
+            for cap_id, capsule in pairs(active_capsules) do
+                if capsule.current_net_id == nil or net_members[capsule.source_hub_unit] then
+                    net_members.capsules = net_members.capsules or {}
+                    net_members.capsules[cap_id] = capsule
+                    capsule.current_net_id = net_id
+                end
+            end
         end
     end
 
@@ -242,6 +272,9 @@ local function rebuild_cluster(cluster, excluded_unit_number)
                 local entity_net_id = allocate_fresh_network_id()
                 local net_members = { [u_num] = entity }
                 bind_entity_to_network(u_num, entity_net_id)
+
+                -- Save explicit reference to this Joiner's primary network
+                storage.primary_networks[u_num] = entity_net_id
 
                 for _, conn in ipairs(conns) do
                     local neighbor = conn.neighbor
