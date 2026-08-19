@@ -1,16 +1,8 @@
 -- scripts/capsulizer.lua
 local capsule_evaluator = require("scripts.capsule_evaluator")
+local capsule_routing = require("scripts.capsule_routing")
 
 local capsulizer = {}
-
-local function get_quality_name(q)
-    if not q then return "normal" end
-    if type(q) == "string" then return q end
-    if type(q) == "table" or type(q) == "userdata" then
-        return q.name or "normal"
-    end
-    return "normal"
-end
 
 --- Retrieves or creates the dedicated liminal surface for off-map item storage
 local function get_liminal_surface()
@@ -35,8 +27,7 @@ local function create_liminal_holder(position)
     }
 end
 
---- Converts hub inventory into a liminal holder and registers the capsule inside the Hub's Primary Network
-function capsulizer.create_capsule_in_hub_network(hub, primary_net_id, eval)
+function capsulizer.dispatch_from_hub(hub, net_id, eval)
     local hub_inv = hub.get_inventory(defines.inventory.chest)
     if not (hub_inv and hub_inv.valid) then return false end
 
@@ -59,62 +50,73 @@ function capsulizer.create_capsule_in_hub_network(hub, primary_net_id, eval)
         end
     end
 
-    -- 3. Move Payload Cargo (Strictly matching item name AND quality)
+    -- 3. Move Payload Cargo (Preserving LuaItemStack metadata like grid, durability, spoilage)
     local items_needed = eval.required_items or eval.payload_count
-    local target_quality_name = eval.payload_quality_name or get_quality_name(eval.payload_quality)
-
     for i = 2, #hub_inv do
         if items_needed <= 0 then break end
 
         local stack = hub_inv[i]
         if stack and stack.valid_for_read and stack.name == eval.payload_name then
-            if get_quality_name(stack.quality) == target_quality_name then
-                local inserted = holder_inv.insert(stack)
-                if inserted > 0 then
-                    stack.count = stack.count - inserted
-                    items_needed = items_needed - inserted
-                end
+            -- Passing 'stack' (LuaItemStack) preserves equipment grids, durability, spoilage, etc.
+            local inserted = holder_inv.insert(stack)
+            if inserted > 0 then
+                stack.count = stack.count - inserted
+                items_needed = items_needed - inserted
             end
         end
     end
 
-    -- 4. Store capsule reference inside the HUB'S OWN PRIMARY NETWORK
+    -- 4. Store capsule reference
     local capsule_id = storage.next_capsule_id or 1
     local created_capsule = {
         id = capsule_id,
         holder = liminal_holder,
         source_hub_unit = hub.unit_number,
-        current_net_id = primary_net_id
+        net_id = net_id
     }
     storage.next_capsule_id = capsule_id + 1
 
-    local primary_net = storage.pneumatic_networks and storage.pneumatic_networks[primary_net_id]
-    if primary_net then
-        primary_net.capsules = primary_net.capsules or {}
-        primary_net.capsules[capsule_id] = created_capsule
+    local net_struct = storage.pneumatic_networks and storage.pneumatic_networks[net_id]
+    if net_struct then
+        net_struct.capsules = net_struct.capsules or {}
+        net_struct.capsules[capsule_id] = created_capsule
     end
 
     return true
 end
 
 function capsulizer.process_all_hubs()
-    if not storage.hubs or not storage.primary_networks then return end
+    if not storage.hubs then return end
 
     for unit_number, hub_data in pairs(storage.hubs) do
         local hub = hub_data.entity
         if hub and hub.valid and hub_data.send then
-            -- Fetch the Hub's own Primary Network ID
-            local primary_net_id = storage.primary_networks[unit_number]
-            if primary_net_id and storage.pneumatic_networks[primary_net_id] then
-                local eval = capsule_evaluator.evaluate_hub_readiness(hub, primary_net_id)
-                if eval and eval.ready then
-                    capsulizer.create_capsule_in_hub_network(hub, primary_net_id, eval)
+            local net_ids = storage.entity_to_network and storage.entity_to_network[unit_number]
+            if net_ids then
+                local candidate_networks = {}
+
+                for net_id, _ in pairs(net_ids) do
+                    local eval = capsule_evaluator.evaluate_hub_readiness(hub, net_id)
+                    if eval and eval.ready then
+                        table.insert(candidate_networks, {
+                            net_id = net_id,
+                            eval = eval
+                        })
+                    end
+                end
+
+                if #candidate_networks > 0 then
+                    local chosen = capsule_routing.select_next_network(hub, candidate_networks)
+                    if chosen then
+                        capsulizer.dispatch_from_hub(hub, chosen.net_id, chosen.eval)
+                    end
                 end
             end
         end
     end
 end
 
+-- Scan hubs for items to capsulize every 15 ticks
 script.on_nth_tick(15, function()
     capsulizer.process_all_hubs()
 end)

@@ -2,8 +2,6 @@ local event_manager = require("scripts.events")
 local gui_info = require("scripts.gui_info")
 local tube_connections = require("scripts.tube_connections")
 local capsule_evaluator = require("scripts.capsule_evaluator")
-local capsule_transport = require("scripts.capsule_transport")
-
 
 --------------------------------------------------------------------------------
 -- HELPER & CLUSTER MANAGEMENT
@@ -153,65 +151,35 @@ local function gather_physical_cluster(initial_entities, excluded_unit_number)
     return cluster
 end
 
---------------------------------------------------------------------------------
--- REBUILD NETWORK CLUSTER (THREE-PASS GRAPH RESOLUTION)
---------------------------------------------------------------------------------
-
 local function rebuild_cluster(cluster, excluded_unit_number)
     storage.pneumatic_networks = storage.pneumatic_networks or {}
     storage.entity_to_network = storage.entity_to_network or {}
-    storage.primary_networks = storage.primary_networks or {}
 
-    -- Step -1: Preserve all in-flight capsules in this cluster before wiping network tables
-    local active_capsules = {}
     for u_num, _ in pairs(cluster) do
-        if u_num ~= excluded_unit_number then
-            local old_nets = storage.entity_to_network[u_num]
-            if old_nets then
-                for net_id, _ in pairs(old_nets) do
-                    local net = storage.pneumatic_networks[net_id]
-                    if net and net.capsules then
-                        for cap_id, capsule in pairs(net.capsules) do
-                            active_capsules[cap_id] = capsule
-                        end
-                        net.capsules = nil
-                    end
-                end
-            end
+        storage.entity_to_network[u_num] = nil
+    end
+
+    for net_id, members in pairs(storage.pneumatic_networks) do
+        for u_num, _ in pairs(cluster) do
+            members[u_num] = nil
+        end
+
+        local member_count = 0
+        for k, _ in pairs(members) do
+            if k ~= "capsules" and k ~= "length" then member_count = member_count + 1 end
+        end
+
+        if member_count == 0 then
+            storage.pneumatic_networks[net_id] = nil
+            release_network_id(net_id)
         end
     end
 
-    -- Step 0: Unbind all entities in this cluster from their current networks
-    for u_num, entity in pairs(cluster) do
-        if u_num ~= excluded_unit_number then
-            storage.primary_networks[u_num] = nil
-            local old_nets = storage.entity_to_network[u_num]
-            if old_nets then
-                for net_id, _ in pairs(old_nets) do
-                    local net = storage.pneumatic_networks[net_id]
-                    if net then
-                        net[u_num] = nil
-                        local remaining = 0
-                        for k, _ in pairs(net) do
-                            if k ~= "capsules" and k ~= "length" then remaining = remaining + 1 end
-                        end
-                        if remaining == 0 then
-                            storage.pneumatic_networks[net_id] = nil
-                            release_network_id(net_id)
-                        end
-                    end
-                end
-                storage.entity_to_network[u_num] = nil
-            end
-        end
-    end
-
-    -- Step 1: Process Tube Networks (Merge <-> Merge unions + boundary Joiners)
     local processed_tubes = {}
 
     for u_num, entity in pairs(cluster) do
-        if entity.valid and u_num ~= excluded_unit_number and not tube_connections.is_join_only(entity) and not processed_tubes[u_num] then
-            local tube_queue = { entity }
+        if entity.valid and not tube_connections.is_join_only(entity) and not processed_tubes[u_num] then
+            local tube_queue = {entity}
             processed_tubes[u_num] = true
 
             local tube_group = {}
@@ -227,6 +195,27 @@ local function rebuild_cluster(cluster, excluded_unit_number)
                     if neighbor and neighbor.valid and neighbor.unit_number ~= excluded_unit_number then
                         if tube_connections.is_join_only(neighbor) then
                             boundary_joiners[neighbor.unit_number] = neighbor
+
+                            -- Do NOT flood-fill across directional pneumatic pumps
+                            if neighbor.name ~= "pneumatic-pump" and conn.target_port and conn.target_port.mode == "join_passthrough" then
+                                local opp_port = tube_connections.get_opposite_passthrough_port(neighbor, conn.target_port)
+                                if opp_port then
+                                    local opp_conns = tube_connections.get_adjacent_connections(neighbor)
+                                    for _, opp_conn in ipairs(opp_conns) do
+                                        if opp_conn.source_port.port_id == opp_port.port_id then
+                                            local opp_neighbor = opp_conn.neighbor
+                                            if opp_neighbor and opp_neighbor.valid
+                                               and opp_neighbor.unit_number ~= excluded_unit_number
+                                               and not tube_connections.is_join_only(opp_neighbor) then
+                                                if cluster[opp_neighbor.unit_number] and not processed_tubes[opp_neighbor.unit_number] then
+                                                    processed_tubes[opp_neighbor.unit_number] = true
+                                                    table.insert(tube_queue, opp_neighbor)
+                                                end
+                                            end
+                                        end
+                                    end
+                                end
+                            end
                         else
                             if conn.source_port and conn.source_port.mode == "merge"
                                and conn.target_port and conn.target_port.mode == "merge" then
@@ -253,46 +242,65 @@ local function rebuild_cluster(cluster, excluded_unit_number)
             end
 
             storage.pneumatic_networks[net_id] = net_members
-
-            -- Migrate preserved capsules into the newly built tube network
-            for cap_id, capsule in pairs(active_capsules) do
-                if capsule.current_net_id == nil or net_members[capsule.source_hub_unit] then
-                    net_members.capsules = net_members.capsules or {}
-                    net_members.capsules[cap_id] = capsule
-                    capsule.current_net_id = net_id
-                end
-            end
         end
     end
 
-    -- Step 2: Entity Primary Networks (Every Joiner gets 1 master network spanning itself + connected neighbors)
     for u_num, entity in pairs(cluster) do
-        if entity.valid and u_num ~= excluded_unit_number and tube_connections.is_join_only(entity) then
+        if entity.valid and tube_connections.is_join_only(entity) then
             local conns = tube_connections.get_adjacent_connections(entity)
-            if #conns > 0 then
-                local entity_net_id = allocate_fresh_network_id()
-                local net_members = { [u_num] = entity }
-                bind_entity_to_network(u_num, entity_net_id)
+            for _, conn in ipairs(conns) do
+                local neighbor = conn.neighbor
+                if neighbor and neighbor.valid and neighbor.unit_number ~= excluded_unit_number and tube_connections.is_join_only(neighbor) then
+                    local netsA = storage.entity_to_network[entity.unit_number]
+                    local netsB = storage.entity_to_network[neighbor.unit_number]
+                    local already_connected = false
 
-                -- Save explicit reference to this Joiner's primary network
-                storage.primary_networks[u_num] = entity_net_id
+                    if netsA and netsB then
+                        for id, _ in pairs(netsA) do
+                            if netsB[id] then already_connected = true break end
+                        end
+                    end
 
-                for _, conn in ipairs(conns) do
-                    local neighbor = conn.neighbor
-                    if neighbor and neighbor.valid and neighbor.unit_number ~= excluded_unit_number then
-                        net_members[neighbor.unit_number] = neighbor
-                        bind_entity_to_network(neighbor.unit_number, entity_net_id)
+                    if not already_connected then
+                        local net_id = allocate_fresh_network_id()
+                        local net_members = {
+                            [entity.unit_number] = entity,
+                            [neighbor.unit_number] = neighbor
+                        }
+                        bind_entity_to_network(entity.unit_number, net_id)
+                        bind_entity_to_network(neighbor.unit_number, net_id)
+                        storage.pneumatic_networks[net_id] = net_members
                     end
                 end
-
-                storage.pneumatic_networks[entity_net_id] = net_members
             end
         end
     end
 
-    -- Step 3: Isolated single-member fallback (ONLY for entities with 0 connections)
     for u_num, entity in pairs(cluster) do
-        if entity.valid and u_num ~= excluded_unit_number then
+        if entity.valid and tube_connections.is_join_only(entity) then
+            local net_ids = storage.entity_to_network[u_num]
+            local has_sub_network = false
+
+            if net_ids then
+                for net_id, _ in pairs(net_ids) do
+                    local members = storage.pneumatic_networks[net_id]
+                    if members and table_size(members) == 1 then
+                        has_sub_network = true
+                        break
+                    end
+                end
+            end
+
+            if not has_sub_network then
+                local net_id = allocate_fresh_network_id()
+                bind_entity_to_network(u_num, net_id)
+                storage.pneumatic_networks[net_id] = { [u_num] = entity }
+            end
+        end
+    end
+
+    for u_num, entity in pairs(cluster) do
+        if entity.valid then
             local net_ids = storage.entity_to_network[u_num]
             if not net_ids or table_size(net_ids) == 0 then
                 local net_id = allocate_fresh_network_id()
@@ -316,7 +324,6 @@ local DIRECTION_NAMES = {
 
 local function get_network_info(entity)
     if not (entity and entity.valid) then return nil end
-    
     sanitize_network_storage()
 
     local net_ids = storage.entity_to_network and storage.entity_to_network[entity.unit_number]
@@ -337,10 +344,6 @@ local function get_network_info(entity)
             local capsule_count = network_entities.capsules and table_size(network_entities.capsules) or 0
             table.insert(info, { key = "Active Capsules", value = capsule_count })
 
-            -- Universal flow evaluation for EVERY segment
-            local flow = capsule_transport.get_segment_flow(net_id)
-            table.insert(info, { key = "Flow Direction", value = flow.status })
-
             local pump_dirs = {}
             for u_num, member in pairs(network_entities) do
                 if u_num ~= "capsules" and u_num ~= "length" and member and member.valid and member.name == "pneumatic-pump" then
@@ -356,14 +359,15 @@ local function get_network_info(entity)
                 table.insert(info, { key = "Pumps", value = "0" })
             end
 
-            -- Hub-specific status overlays
             if entity.name == "capsule-hub-horizontal" or entity.name == "capsule-hub-vertical" then
                 local eval = capsule_evaluator.evaluate_hub_readiness(entity, net_id)
                 if eval then
                     local payload_str = eval.payload_ready and ("Ready (" .. eval.payload_name .. " x" .. eval.capacity .. ")") or "Not Ready"
+                    local flow_str = eval.flow_ready and ("Outward (" .. eval.flow_direction .. ")") or (eval.flow_direction and "Inward Flow" or "No Flow")
                     local status_str = eval.ready and "READY TO DISPATCH" or "WAITING"
 
                     table.insert(info, { key = "Payload Status", value = payload_str })
+                    table.insert(info, { key = "Flow Direction", value = flow_str })
                     table.insert(info, { key = "Dispatch Status", value = status_str })
                 end
             end
@@ -382,8 +386,171 @@ local function on_entity_built(e)
     if not entity or not entity.valid then return end
     if not tube_connections.is_connectable(entity.name) then return end
 
-    local cluster = gather_physical_cluster({entity})
-    rebuild_cluster(cluster)
+    storage.pneumatic_networks = storage.pneumatic_networks or {}
+    storage.entity_to_network = storage.entity_to_network or {}
+
+    local u_num = entity.unit_number
+    local is_join = tube_connections.is_join_only(entity)
+    local conns = tube_connections.get_adjacent_connections(entity)
+
+    if not is_join then
+        local adjacent_tube_nets = {}
+        local adjacent_joiners = {}
+
+        for _, conn in ipairs(conns) do
+            local neighbor = conn.neighbor
+            if neighbor and neighbor.valid then
+                local n_num = neighbor.unit_number
+                if tube_connections.is_join_only(neighbor) then
+                    table.insert(adjacent_joiners, neighbor)
+
+                    if neighbor.name ~= "pneumatic-pump" and conn.target_port and conn.target_port.mode == "join_passthrough" then
+                        local opp_port = tube_connections.get_opposite_passthrough_port(neighbor, conn.target_port)
+                        if opp_port then
+                            local opp_conns = tube_connections.get_adjacent_connections(neighbor)
+                            for _, opp_conn in ipairs(opp_conns) do
+                                if opp_conn.source_port.port_id == opp_port.port_id then
+                                    local opp_neighbor = opp_conn.neighbor
+                                    if opp_neighbor and opp_neighbor.valid and not tube_connections.is_join_only(opp_neighbor) then
+                                        local nets = storage.entity_to_network[opp_neighbor.unit_number]
+                                        if nets then
+                                            for net_id, _ in pairs(nets) do
+                                                adjacent_tube_nets[net_id] = true
+                                            end
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                    end
+                else
+                    if conn.source_port and conn.source_port.mode == "merge"
+                       and conn.target_port and conn.target_port.mode == "merge" then
+                        local nets = storage.entity_to_network[n_num]
+                        if nets then
+                            for net_id, _ in pairs(nets) do
+                                adjacent_tube_nets[net_id] = true
+                            end
+                        end
+                    end
+                end
+            end
+        end
+
+        local target_net_id = nil
+        local net_id_list = {}
+        for net_id, _ in pairs(adjacent_tube_nets) do
+            table.insert(net_id_list, net_id)
+        end
+
+        if #net_id_list == 0 then
+            target_net_id = allocate_fresh_network_id()
+            storage.pneumatic_networks[target_net_id] = {}
+        else
+            target_net_id = net_id_list[1]
+            for i = 2, #net_id_list do
+                local sec_net_id = net_id_list[i]
+                local sec_members = storage.pneumatic_networks[sec_net_id]
+                if sec_members then
+                    for member_unum, member_ent in pairs(sec_members) do
+                        if member_unum ~= "capsules" and member_unum ~= "length" then
+                            storage.pneumatic_networks[target_net_id][member_unum] = member_ent
+                            bind_entity_to_network(member_unum, target_net_id)
+                            if storage.entity_to_network[member_unum] then
+                                storage.entity_to_network[member_unum][sec_net_id] = nil
+                            end
+                        end
+                    end
+                end
+                merge_network_capsules(sec_net_id, target_net_id)
+                storage.pneumatic_networks[sec_net_id] = nil
+                release_network_id(sec_net_id)
+            end
+        end
+
+        storage.pneumatic_networks[target_net_id][u_num] = entity
+        bind_entity_to_network(u_num, target_net_id)
+
+        for _, joiner in ipairs(adjacent_joiners) do
+            if not storage.pneumatic_networks[target_net_id][joiner.unit_number] then
+                storage.pneumatic_networks[target_net_id][joiner.unit_number] = joiner
+                bind_entity_to_network(joiner.unit_number, target_net_id)
+            end
+        end
+
+    else
+        local passthrough_pairs = tube_connections.get_passthrough_pairs(entity)
+        for pair_id, ports in pairs(passthrough_pairs) do
+            local channel_nets = {}
+            for _, port in ipairs(ports) do
+                for _, conn in ipairs(conns) do
+                    if conn.source_port and conn.source_port.port_id == port.port_id then
+                        local neighbor = conn.neighbor
+                        if neighbor and neighbor.valid and not tube_connections.is_join_only(neighbor) then
+                            local nets = storage.entity_to_network[neighbor.unit_number]
+                            if nets then
+                                for net_id, _ in pairs(nets) do
+                                    table.insert(channel_nets, net_id)
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+
+            if entity.name ~= "pneumatic-pump" and #channel_nets > 1 then
+                local primary_net_id = channel_nets[1]
+                for i = 2, #channel_nets do
+                    local sec_net_id = channel_nets[i]
+                    if sec_net_id ~= primary_net_id then
+                        local sec_members = storage.pneumatic_networks[sec_net_id]
+                        if sec_members then
+                            for member_unum, member_ent in pairs(sec_members) do
+                                if member_unum ~= "capsules" and member_unum ~= "length" then
+                                    storage.pneumatic_networks[primary_net_id][member_unum] = member_ent
+                                    bind_entity_to_network(member_unum, primary_net_id)
+                                    if storage.entity_to_network[member_unum] then
+                                        storage.entity_to_network[member_unum][sec_net_id] = nil
+                                    end
+                                end
+                            end
+                        end
+                        merge_network_capsules(sec_net_id, primary_net_id)
+                        storage.pneumatic_networks[sec_net_id] = nil
+                        release_network_id(sec_net_id)
+                    end
+                end
+            end
+        end
+
+        for _, conn in ipairs(conns) do
+            local neighbor = conn.neighbor
+            if neighbor and neighbor.valid then
+                local n_num = neighbor.unit_number
+                if tube_connections.is_join_only(neighbor) then
+                    local net_id = allocate_fresh_network_id()
+                    storage.pneumatic_networks[net_id] = {
+                        [u_num] = entity,
+                        [n_num] = neighbor
+                    }
+                    bind_entity_to_network(u_num, net_id)
+                    bind_entity_to_network(n_num, net_id)
+                else
+                    local nets = storage.entity_to_network[n_num]
+                    if nets then
+                        for net_id, _ in pairs(nets) do
+                            storage.pneumatic_networks[net_id][u_num] = entity
+                            bind_entity_to_network(u_num, net_id)
+                        end
+                    end
+                end
+            end
+        end
+
+        local sub_net_id = allocate_fresh_network_id()
+        storage.pneumatic_networks[sub_net_id] = { [u_num] = entity }
+        bind_entity_to_network(u_num, sub_net_id)
+    end
 end
 
 local function on_entity_removed(e)
@@ -407,11 +574,26 @@ local function on_entity_removed(e)
         end
     end
 
-    -- Harvest in-flight capsules from destroyed networks passing through this tile
-    local harvested_capsules = {}
+    local target_net_ids = {}
     local removed_nets = storage.entity_to_network and storage.entity_to_network[removed_unit_number]
-    if removed_nets and storage.pneumatic_networks then
+    if removed_nets then
         for net_id, _ in pairs(removed_nets) do
+            target_net_ids[net_id] = true
+        end
+    end
+
+    for _, neighbor in ipairs(neighbors) do
+        local neighbor_nets = storage.entity_to_network and storage.entity_to_network[neighbor.unit_number]
+        if neighbor_nets then
+            for net_id, _ in pairs(neighbor_nets) do
+                target_net_ids[net_id] = true
+            end
+        end
+    end
+
+    local harvested_capsules = {}
+    if storage.pneumatic_networks then
+        for net_id, _ in pairs(target_net_ids) do
             local net_struct = storage.pneumatic_networks[net_id]
             if net_struct and net_struct.capsules then
                 for _, capsule in pairs(net_struct.capsules) do
@@ -462,16 +644,32 @@ local function on_entity_removed(e)
         end
     end
 
+    if storage.pneumatic_networks then
+        for net_id, _ in pairs(target_net_ids) do
+            local net_struct = storage.pneumatic_networks[net_id]
+            if net_struct then
+                for u_num, _ in pairs(net_struct) do
+                    if u_num ~= "capsules" and u_num ~= "length" and storage.entity_to_network and storage.entity_to_network[u_num] then
+                        storage.entity_to_network[u_num][net_id] = nil
+                        if table_size(storage.entity_to_network[u_num]) == 0 then
+                            storage.entity_to_network[u_num] = nil
+                        end
+                    end
+                end
+            end
+            storage.pneumatic_networks[net_id] = nil
+            release_network_id(net_id)
+        end
+    end
+
     if storage.entity_to_network then
         storage.entity_to_network[removed_unit_number] = nil
     end
 
-    -- Rebuild surviving tube/joiner islands
     for _, island in ipairs(merged_islands) do
         rebuild_cluster(island, removed_unit_number)
     end
 
-    -- Spill harvested in-flight capsules
     redistribute_harvested_capsules(harvested_capsules, removed_position)
 end
 
@@ -529,7 +727,7 @@ local remove_events = {
     defines.events.on_player_mined_entity,
     defines.events.on_robot_mined_entity,
     defines.events.on_entity_died,
-    defines.events.script_raised_destroy,
+    defines.script_raised_destroy,
 }
 if defines.events.on_space_platform_mined_entity then
     table.insert(remove_events, defines.events.on_space_platform_mined_entity)
@@ -546,10 +744,5 @@ end
 event_manager.register(defines.events.on_selected_entity_changed, on_selected_entity_changed)
 
 event_manager.register(defines.events.on_player_rotated_entity, function(e)
-    local entity = e.entity
-    if entity and entity.valid and tube_connections.is_connectable(entity.name) then
-        local cluster = gather_physical_cluster({entity})
-        rebuild_cluster(cluster)
-    end
     on_selected_entity_changed({ player_index = e.player_index })
 end)
