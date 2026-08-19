@@ -4,19 +4,22 @@ local capsule_evaluator = {}
 -- Configurable max capsules per network
 capsule_evaluator.MAX_CAPSULES_PER_NETWORK = 1
 
-local function get_capsule_capacity(quality)
-    if not quality then return 1 end
-    local name = "normal"
-    if type(quality) == "string" then
-        name = quality
-    elseif type(quality) == "table" or type(quality) == "userdata" then
-        name = quality.name or "normal"
+local function get_quality_name(q)
+    if not q then return "normal" end
+    if type(q) == "string" then return q end
+    if type(q) == "table" or type(q) == "userdata" then
+        return q.name or "normal"
     end
+    return "normal"
+end
 
-    if name == "legendary" then return 5
-    elseif name == "epic" then return 4
-    elseif name == "rare" then return 3
-    elseif name == "uncommon" then return 2
+local function get_capsule_capacity(quality)
+    local q_name = get_quality_name(quality)
+
+    if q_name == "legendary" then return 5
+    elseif q_name == "epic" then return 4
+    elseif q_name == "rare" then return 3
+    elseif q_name == "uncommon" then return 2
     else return 1
     end
 end
@@ -80,26 +83,20 @@ function capsule_evaluator.evaluate_hub_readiness(hub_entity, net_id)
     local carrier_quality = slot1_stack.quality
     local required_full_stacks = get_capsule_capacity(carrier_quality)
 
-    -- 5. Aggregate item counts across cargo slots (Slot 2 to #inv)
+    -- 5. Aggregate item counts strictly grouped by item name AND quality
     local payload_candidates = {}
 
     for i = 2, #inv do
         local stack = inv[i]
         if stack and stack.valid_for_read then
             local max_stack_size = stack.prototype.stack_size
-            local q_name = "normal"
-            if stack.quality then
-                if type(stack.quality) == "table" or type(stack.quality) == "userdata" then
-                    q_name = stack.quality.name or "normal"
-                elseif type(stack.quality) == "string" then
-                    q_name = stack.quality
-                end
-            end
+            local q_name = get_quality_name(stack.quality)
             local key = stack.name .. "@" .. q_name
 
             payload_candidates[key] = payload_candidates[key] or {
                 name = stack.name,
                 quality = stack.quality,
+                quality_name = q_name,
                 max_stack_size = max_stack_size,
                 total_count = 0,
                 slots = {}
@@ -110,7 +107,7 @@ function capsule_evaluator.evaluate_hub_readiness(hub_entity, net_id)
         end
     end
 
-    -- 6. Check if total accumulated items meet required full-stack item count
+    -- 6. Check if total accumulated items of a SINGLE quality group meet required stack count
     for _, candidate in pairs(payload_candidates) do
         local required_items = candidate.max_stack_size * required_full_stacks
         if candidate.total_count >= required_items then
@@ -123,6 +120,7 @@ function capsule_evaluator.evaluate_hub_readiness(hub_entity, net_id)
                 required_items = required_items,
                 payload_name = candidate.name,
                 payload_quality = candidate.quality,
+                payload_quality_name = candidate.quality_name,
                 payload_count = candidate.total_count,
                 payload_slots = candidate.slots
             }
